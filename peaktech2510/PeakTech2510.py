@@ -111,7 +111,6 @@ class PeakTech2510:
         # self.ser = serial.Serial(serial_port, baudrate=baudrate, timeout=timeout)
         self.ser = io.open("input_test_2.txt")
         data = self.ser.read().split('b')[1:]
-        print((data))
         self.input = data
 
     def read_data(self) -> PeakTech2510OutputData:
@@ -119,7 +118,6 @@ class PeakTech2510:
         data = []
         for i in range(16):
             byte = self.input.pop(0).replace('\'','')
-            print(byte)
             data.append(byte)
         if len(data) == 16:
             return self._parse_data(data)
