@@ -11,6 +11,9 @@ The user should ensure that read_data() is polled at a sufficient frequency, as 
 """
 
 # Constants
+DATA_FRAME_NUM_BYTES = 16
+DATA_FRAME_START_WORD = '\\x02'
+DATA_FRAME_END_WORD = '\\r'
 DISPLAY_READING_LENGTH = 8
 DECIMAL_POINT_ALLOWED_VALUES = ['0', '1', '2', '3']
 POLARITY_ALLOWED_VALUES = ['Positive', 'Negative']
@@ -113,33 +116,81 @@ class PeakTech2510:
         data = self.ser.read().split('b')[1:]
         self.input = data
 
-    def read_data(self) -> PeakTech2510OutputData:
-        """Read data from the instrument and return parsed result."""
+    def read_data(self, timeout_num_bytes=32) -> PeakTech2510OutputData:
+        """Read data from the instrument and return parsed result. 
+        Default value for timeout bytes is set to the length of two 16 byte data frames"""
+        total_num_bytes = 0
         data = []
-        for i in range(16):
-            byte = self.input.pop(0).replace('\'','')
-            data.append(byte)
-        if len(data) == 16:
-            return self._parse_data(data)
-        return None
+        current_byte = ''
+        DATA_frame_START_WORD = '\\x02'
+
+        # Pop bytes until a start of data byte is found or we time out
+        while total_num_bytes < timeout_num_bytes:
+            current_byte = self._pop_byte()
+            if current_byte == DATA_FRAME_START_WORD:
+                break
+            total_num_bytes += 1
+        
+        # Did we find start of data byte?
+        if not current_byte == DATA_FRAME_START_WORD:
+            print("Timeout. Did not find start of data byte in the first", timeout_num_bytes, "bytes")
+            return None
+        print("Found start of data byte")
+
+        # Append start of data byte to data frame
+        data.append(current_byte)
+
+        # Expect multiple start of data bytes, the PeakTech2510 sometimes sends more of them for some reason...
+        while total_num_bytes < timeout_num_bytes:
+            current_byte = self._pop_byte()
+            if current_byte != DATA_FRAME_START_WORD:
+                data.append(current_byte)
+                break
+            total_num_bytes += 1
+
+        # Did we time out?
+        if not total_num_bytes < timeout_num_bytes:
+            print("Timeout. Did not find start of data byte in the first", timeout_num_bytes, "bytes")
+            return None
+        
+        # Pop remaining bytes in the data frame
+        current_data_frame_num_bytes = 1
+        while current_data_frame_num_bytes < (DATA_FRAME_NUM_BYTES - 1):
+            current_byte = self._pop_byte()
+            data.append(current_byte)
+            current_data_frame_num_bytes += 1
+        
+        # _parse_data() will handle erroneous data within the frame. Our job is just to ensure correct length and presence of start
+        # and end of data
+        if len(data) != DATA_FRAME_NUM_BYTES or data[-1] != DATA_FRAME_END_WORD:
+            print("Wrong data frame size, did not find end word in expected place. Data frame was", data, "with length", len(data))
+            return None
+
+        print("Found full data frame", data)
+        return self._parse_data(data)
+
+    def _pop_byte(self) -> str:
+        current_byte = self.input.pop(0).replace('\'','')
+        print("found byte", current_byte)
+        return current_byte
 
     @staticmethod
-    def _parse_data(data_stream):
-        """Parses the 16-digit data stream from the device """
+    def _parse_data(data_frame) -> PeakTech2510OutputData:
+        """Parses the 16-digit data frame from the device """
         
-        # Reverse the data stream, so it fits with the description from the user manual
-        data_stream.reverse()
+        # Reverse the data frame, so it fits with the description from the user manual
+        data_frame.reverse()
         
         # Decode the data packet according to the user manual
         parsed_data = {
-        'End_Word': data_stream[0],
-        'Display_reading': data_stream[1:9],
-        'Decimal_Point': data_stream[9],
-        'Polarity': 'Positive' if data_stream[10] == '0' else 'Negative',
-        'Annunciator_for_Display': data_stream[11:13],
-        'LCD_Display': data_stream[13],
-        'D14': data_stream[14],
-        'Start_Word': data_stream[15]
+        'End_Word': data_frame[0],
+        'Display_reading': data_frame[1:9],
+        'Decimal_Point': data_frame[9],
+        'Polarity': 'Positive' if data_frame[10] == '0' else 'Negative',
+        'Annunciator_for_Display': data_frame[11:13],
+        'LCD_Display': data_frame[13],
+        'D14': data_frame[14],
+        'Start_Word': data_frame[15]
         }
         # ... and reverse the order of data sequences that are longer than a single byte aswell
         parsed_data['Display_reading'].reverse()
