@@ -2,7 +2,13 @@ import serial
 import csv
 import argparse
 import io
-import ast
+
+"""
+Wrapper around the serial interface to the PeakTech 2510 Energy meter based on the product manual found on: https://www.peaktech.de/media/52/bd/50/1625732272/PeakTech_2510_07-2021_DE_EN.pdf (05.11.2023)
+
+The PeakTech 2510 serial interface is output only, so the PeakTech2510 object simply reads from a serial connection, and parses the output data.
+The user should ensure that read_data() is polled at a sufficient frequency, as no action is taken by the PeakTech2510 object between calls to this function.
+"""
 
 # Constants
 DISPLAY_READING_LENGTH = 8
@@ -35,7 +41,7 @@ class Annunciator:
         if annunciator in Annunciator.annunciator_dict:
             self.annunciator = annunciator
         else:
-            raise ValueError("Unknown or uninitialized annunciator", annunciator)
+            raise ValueError("Unknown annunciator", annunciator)
 
     def get_str(self):
         return Annunciator.annunciator_dict[self.annunciator]
@@ -62,27 +68,40 @@ class PeakTech2510OutputData:
         self.annunciator = annunciator
         self.display = display
 
-    def get_display_reading(self):
+    def get_display_reading(self) -> str:
+        """ Returns the display reading with the decimal point inserted and a '-' as the first character if it is negative """
+        display_reading_with_polarity = self.display_reading
+        if self.get_polarity() == 'Negative':
+            display_reading_with_polarity = '-' + display_reading_with_polarity
         if self.decimal_point == "0":
             # No decimal point
-            return self.display_reading
+            return display_reading_with_polarity
         else:
             # Add decimal point
-            return self.display_reading[:-int(self.decimal_point)] + ',' + self.display_reading[-int(self.decimal_point):]
+            return display_reading_with_polarity[:-int(self.decimal_point)] + '.' + display_reading_with_polarity[-int(self.decimal_point):]
 
-    def get_display_reading_raw(self):
+    def get_display_reading_raw(self) -> str:
+        """ Returns the raw display reading as a string of length DISPLAY_READING_LENGTH """
         return self.display_reading
 
-    def get_decimal_point(self):
+    def get_decimal_point(self) -> str:
+        """ Returns the position of the decimal point, if any """
         return self.decimal_point
     
-    def get_polarity(self):
+    def get_polarity(self) -> str:
+        """ Returns the polarity of the display reading """
         return self.polarity
 
-    def get_annunciator_str(self):
+    def get_annunciator_text_str(self) -> str:
+        """ Returns the annunciator text value """
         return self.annunciator.get_str()
     
-    def get_display(self):
+    def get_annunciator_num_str(self) -> str:
+        """ Returns the annunciator numerical value as a str """
+        return self.annunciator.get_num()
+    
+    def get_display(self) -> str:
+        """ Returns the display ID """
         return self.display
     
 
@@ -90,10 +109,9 @@ class PeakTech2510:
 
     def __init__(self, serial_port, baudrate=9600, timeout=1.0):
         # self.ser = serial.Serial(serial_port, baudrate=baudrate, timeout=timeout)
-        self.ser = io.open("input_test.txt")
+        self.ser = io.open("input_test_2.txt")
         data = self.ser.read().split('b')[1:]
         print((data))
-        # self.input = [ast.literal_eval('b' + byte_string) for byte_string in data]
         self.input = data
 
     def read_data(self) -> PeakTech2510OutputData:
@@ -109,21 +127,23 @@ class PeakTech2510:
 
     @staticmethod
     def _parse_data(data_stream):
-        """Parses the 16-digit data stream from the device."""
+        """Parses the 16-digit data stream from the device """
         
         # Reverse the data stream, so it fits with the description from the user manual
         data_stream.reverse()
+        
+        # Decode the data packet according to the user manual
         parsed_data = {
         'End_Word': data_stream[0],
         'Display_reading': data_stream[1:9],
         'Decimal_Point': data_stream[9],
         'Polarity': 'Positive' if data_stream[10] == '0' else 'Negative',
         'Annunciator_for_Display': data_stream[11:13],
-        'LDC_Display': data_stream[13],
+        'LCD_Display': data_stream[13],
         'D14': data_stream[14],
         'Start_Word': data_stream[15]
         }
-        # ... and reverse the data sequences that are longer than a single byte aswell
+        # ... and reverse the order of data sequences that are longer than a single byte aswell
         parsed_data['Display_reading'].reverse()
         parsed_data['Annunciator_for_Display'].reverse()
 
@@ -134,7 +154,7 @@ class PeakTech2510:
                                                 decimal_point=parsed_data['Decimal_Point'], \
                                                 polarity=parsed_data['Polarity'], \
                                                 annunciator=Annunciator("".join(parsed_data['Annunciator_for_Display'])), \
-                                                display=parsed_data['LDC_Display'])
+                                                display=parsed_data['LCD_Display'])
         except ValueError:
             # Print an error, just return an empty reading with all zeroes
             print("WARNING: Error when parsing output data")
@@ -154,7 +174,7 @@ def main(serial_port, baudrate, timeout, csv_filename):
     instrument = PeakTech2510(serial_port, baudrate, timeout)
 
     with open(csv_filename, 'w', newline='') as csv_file:
-        csv_writer = csv.DictWriter(csv_file, fieldnames=['End_Word', 'Display_reading', 'Decimal_Point', 'Polarity', 'Annunciator_for_Display', 'LDC_Display', 'D14', 'Start_Word'])
+        csv_writer = csv.DictWriter(csv_file, fieldnames=['End_Word', 'Display_reading', 'Decimal_Point', 'Polarity', 'Annunciator_for_Display', 'LCD_Display', 'D14', 'Start_Word'])
         csv_writer.writeheader()
 
         try:
