@@ -124,7 +124,6 @@ class PeakTech2510:
         total_num_bytes = 0
         data = []
         current_byte = ''
-        # DATA_FRAME_START_WORD = b'\x02'
 
         # Pop bytes until a start of data byte is found or we time out
         while total_num_bytes < timeout_num_bytes:
@@ -174,7 +173,12 @@ class PeakTech2510:
 
     def _pop_byte(self) -> str:
         if self.input_from_file:
-            current_byte = self.input.pop(0).replace('\'','')
+            # Handle start/stop characters separately
+            current_char = self.input.pop(0).replace('\'','')
+            if current_char.startswith('\\'):
+                current_byte = bytes(current_char, "utf-8").decode("unicode_escape").encode("latin1")
+            else:
+                current_byte = bytes(current_char, "utf-8")
         else:
             current_byte = self.input.read(1)
         print("found byte", current_byte, "type", type(current_byte), current_byte.decode())
