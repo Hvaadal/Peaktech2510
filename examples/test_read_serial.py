@@ -1,49 +1,137 @@
-import serial
 import csv
 import argparse
+import sys
+import os
+import queue
+import threading
+import time
+import tkinter as tk
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-def parse_data(data_stream):
-    """
-    Parses the 16-digit data stream from the device and returns a dictionary of the parsed values.
-    """
-    parsed_data = {
-        'End_Word': data_stream[0],
-        'Display_reading': int(data_stream[1:9], 2),
-        'Decimal_Point': int(data_stream[9], 2),
-        'Polarity': 'Positive' if data_stream[10] == '0' else 'Negative',
-        'Annunciator_for_Display': int(data_stream[11:13], 2),
-        'LDC_Display': int(data_stream[13], 2),
-        'D14': data_stream[14],
-        'Start_Word': data_stream[15]
-    }
-    return parsed_data
+import matplotlib.pyplot as plt
 
-def main(serial_port, baudrate, timeout, csv_filename):
-    # Open the serial connection
-    with serial.Serial(serial_port, baudrate=baudrate, timeout=timeout) as ser:
-        with open(csv_filename, 'w', newline='') as csv_file:
-            csv_writer = csv.DictWriter(csv_file, fieldnames=['End_Word', 'Display_reading', 'Decimal_Point', 'Polarity', 'Annunciator_for_Display', 'LDC_Display', 'D14', 'Start_Word'])
-            csv_writer.writeheader()
-            
-            while True:
-                try:
-                    # Read data from serial port
-                    data = ser.read(16)  # Read 16 bytes (assuming each digit corresponds to a byte)
-                    print("Read: ", data)
-                    if len(data) == 16:
-                        parsed_data = parse_data(data)
-                        csv_writer.writerow(parsed_data)
-                except KeyboardInterrupt:
-                    # Exit the loop if Ctrl+C is pressed
-                    break
+sys.path.append(os.getcwd()+"\..\peaktech2510")
+from PeakTech2510 import PeakTech2510
+
+GET_DATA_FROM_FILE = True
+TIMER_FONT = {'family':"Helvetica", 'size':40}
+PLOT_X_AXIS_LIMITS = {'left':0, 'right':300}
+PLOT_Y_AXIS_LIMITS = [[0, 1.2], [200, 400], [210, 250], [0.5, 2]]
+
+running = False
+start_time = 0
+data_queue = queue.Queue()
+
+def trigger_press():
+    global running
+    global data_history
+    global data_queue
+    global start_time
+    running = not running
+    if running:
+        # Set initial time for counter
+        start_time = time.time()
+
+        # Start threads
+        threading.Thread(target=get_data, args=("COM3", 9600, 1, "output", GET_DATA_FROM_FILE), daemon=True).start()
+        threading.Thread(target=update_timer).start()
+        
+        # Update plot is scheduled using tkinter.after(), but we need to kick it off by calling it the first time
+        update_plot()
+
+        # Button is now stop button
+        toggle_button['text'] = "STOP + SAVE"
+    else:
+        # Clear the data in a sensible way
+        data_history = [[] for _ in range(num_plots)]
+        data_queue = queue.Queue()
+
+        # Button is now start button
+        toggle_button['text'] = "START"
+
+def update_timer():
+    while running:
+        print(timer_label.keys())
+        timer_label['text'] = f'Test time: {(time.time() - start_time):.2f}s'
+
+def get_data(serial_port, baudrate, timeout, csv_filename, input_from_file=False):
+    instrument = PeakTech2510(serial_port, baudrate, timeout, input_from_file)
+    # Clear the output csv files and write column headers
+    for i in range(1,5):
+        with open(csv_filename+str(i)+'.csv', 'w', newline='') as csv_file:
+            csv_writer = csv.DictWriter(csv_file, fieldnames=['Display_reading', 'Annunciator_for_Display', 'LCD_Display', 'Polarity'])
+            # csv_writer.writeheader()
+    
+    # Continuously read from instrument and update csv files with data
+    while running:
+        # Insert a small delay when reading from file, to simulate more accurately the behaviour of actually connecting to an instrument
+        if input_from_file:
+            time.sleep(0.01)
+        data = instrument.read_data()      
+        data_queue.put(data)
+        print("put data in q")
+        row = {}
+        row['Display_reading']= data.get_display_reading()
+        row['Annunciator_for_Display'] = data.get_annunciator_text_str()
+        row['LCD_Display'] = data.get_display()
+        row['Polarity'] = data.get_polarity()
+        if data:
+            with open(csv_filename+row['LCD_Display']+'.csv', 'a', newline='') as csv_file: 
+                csv_writer = csv.DictWriter(csv_file, fieldnames=['Display_reading', 'Annunciator_for_Display', 'LCD_Display', 'Polarity'])
+                csv_writer.writerow(row)
+
+    instrument.close()
+
+def update_plot():
+    while not data_queue.empty():
+        data=data_queue.get()
+        print("got data from q", data.get_display_reading())
+        data_history[int(data.get_display())-1].append(float(data.get_display_reading()))
+    print(data_history[:][-10:])
+    # Update each subplot
+    for i, ax in enumerate(axs.flatten()):
+        ax.clear()
+        print("PLotting", i, " with data", data_history[i])
+        ax.plot(data_history[i], linewidth=2)
+        ax.set_title(titles[i])
+        ax.set_xlabel(x_labels[i])
+        ax.set_ylabel(y_labels[i])
+        ax.set_ylim(bottom=PLOT_Y_AXIS_LIMITS[i][0], top=PLOT_Y_AXIS_LIMITS[i][1])
+        ax.set_xlim(left=PLOT_X_AXIS_LIMITS['left'], right=PLOT_X_AXIS_LIMITS['right'])
+
+    canvas.draw()
+
+    if running:
+        root.after(500, update_plot)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Read data from the RS-232 device and store it in a CSV file.")
     parser.add_argument('-p', '--port', type=str, required=True, help="Serial port name, e.g., COM3 or /dev/ttyS0.")
     parser.add_argument('-b', '--baudrate', type=int, default=9600, help="Baud rate. Default is 9600.")
     parser.add_argument('-t', '--timeout', type=float, default=1.0, help="Timeout for reading data in seconds. Default is 1 second.")
-    parser.add_argument('-f', '--file', type=str, default='output.csv', help="Output CSV filename. Default is 'output.csv'.")
+    parser.add_argument('-f', '--file', type=str, default='output', help="Output CSV filename. Default is 'output'.")
     
     args = parser.parse_args()
     
-    main(args.port, args.baudrate, args.timeout, args.file)
+    # GUI setup
+    root = tk.Tk()
+    root.title("Hello world")
+    toggle_button = tk.Button(root, text="START", command=trigger_press, font=tk.font.Font(family=TIMER_FONT['family'], size=TIMER_FONT['size']))
+    toggle_button.pack()
+    timer_label = tk.Label(root, text="Test time 0.00s", font=tk.font.Font(family=TIMER_FONT['family'], size=TIMER_FONT['size']))
+    timer_label.pack()
+
+    # Plot setup
+    num_plots = 4
+    data_history = [[] for _ in range(num_plots)]
+    titles = ['Power factor', 'Power', 'Voltage', 'Current']
+    x_labels = ['X1', 'X2', 'X3', 'X4']
+    y_labels = ['Power factor', 'Watts', 'Volts', 'Ampere']
+
+    fig, axs = plt.subplots(2, 2, figsize=(10, 10))
+    canvas = FigureCanvasTkAgg(fig, master=root)
+    canvas_widget = canvas.get_tk_widget()
+    canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+
+    root.mainloop()

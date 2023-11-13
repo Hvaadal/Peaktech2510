@@ -12,8 +12,8 @@ The user should ensure that read_data() is polled at a sufficient frequency, as 
 
 # Constants
 DATA_FRAME_NUM_BYTES = 16
-DATA_FRAME_START_WORD = '\\x02'
-DATA_FRAME_END_WORD = '\\r'
+DATA_FRAME_START_WORD = b'\x02'
+DATA_FRAME_END_WORD = b'\r'
 DISPLAY_READING_LENGTH = 8
 DECIMAL_POINT_ALLOWED_VALUES = ['0', '1', '2', '3']
 POLARITY_ALLOWED_VALUES = ['Positive', 'Negative']
@@ -110,11 +110,13 @@ class PeakTech2510OutputData:
 
 class PeakTech2510:
 
-    def __init__(self, serial_port, baudrate=9600, timeout=1.0):
-        # self.ser = serial.Serial(serial_port, baudrate=baudrate, timeout=timeout)
-        self.ser = io.open("input_test_2.txt")
-        data = self.ser.read().split('b')[1:]
-        self.input = data
+    def __init__(self, serial_port, baudrate=9600, timeout=1.0, input_from_file=False):
+        self.input_from_file = input_from_file
+        if self.input_from_file:
+            self.input_file = io.open("input_test_2.txt")
+            self.input = self.input_file.read().split('b')[1:]
+        else:
+            self.input = serial.Serial(serial_port, baudrate=baudrate, timeout=timeout)
 
     def read_data(self, timeout_num_bytes=32) -> PeakTech2510OutputData:
         """Read data from the instrument and return parsed result. 
@@ -122,13 +124,13 @@ class PeakTech2510:
         total_num_bytes = 0
         data = []
         current_byte = ''
-        DATA_frame_START_WORD = '\\x02'
 
         # Pop bytes until a start of data byte is found or we time out
         while total_num_bytes < timeout_num_bytes:
             current_byte = self._pop_byte()
             if current_byte == DATA_FRAME_START_WORD:
                 break
+            print(current_byte, "is not equal to", DATA_FRAME_START_WORD)
             total_num_bytes += 1
         
         # Did we find start of data byte?
@@ -138,13 +140,13 @@ class PeakTech2510:
         print("Found start of data byte")
 
         # Append start of data byte to data frame
-        data.append(current_byte)
+        data.append(current_byte.decode())
 
         # Expect multiple start of data bytes, the PeakTech2510 sometimes sends more of them for some reason...
         while total_num_bytes < timeout_num_bytes:
             current_byte = self._pop_byte()
             if current_byte != DATA_FRAME_START_WORD:
-                data.append(current_byte)
+                data.append(current_byte.decode())
                 break
             total_num_bytes += 1
 
@@ -157,12 +159,12 @@ class PeakTech2510:
         current_data_frame_num_bytes = 1
         while current_data_frame_num_bytes < (DATA_FRAME_NUM_BYTES - 1):
             current_byte = self._pop_byte()
-            data.append(current_byte)
+            data.append(current_byte.decode())
             current_data_frame_num_bytes += 1
         
         # _parse_data() will handle erroneous data within the frame. Our job is just to ensure correct length and presence of start
         # and end of data
-        if len(data) != DATA_FRAME_NUM_BYTES or data[-1] != DATA_FRAME_END_WORD:
+        if len(data) != DATA_FRAME_NUM_BYTES or data[-1].encode() != DATA_FRAME_END_WORD:
             print("Wrong data frame size, did not find end word in expected place. Data frame was", data, "with length", len(data))
             return None
 
@@ -170,8 +172,16 @@ class PeakTech2510:
         return self._parse_data(data)
 
     def _pop_byte(self) -> str:
-        current_byte = self.input.pop(0).replace('\'','')
-        print("found byte", current_byte)
+        if self.input_from_file:
+            # Handle start/stop characters separately
+            current_char = self.input.pop(0).replace('\'','')
+            if current_char.startswith('\\'):
+                current_byte = bytes(current_char, "utf-8").decode("unicode_escape").encode("latin1")
+            else:
+                current_byte = bytes(current_char, "utf-8")
+        else:
+            current_byte = self.input.read(1)
+        print("found byte", current_byte, "type", type(current_byte), current_byte.decode())
         return current_byte
 
     @staticmethod
@@ -216,7 +226,8 @@ class PeakTech2510:
 
     def close(self):
         """Close the serial connection."""
-        self.ser.close()
+        if not self.input_from_file:
+            self.input.close()
 
 
 def main(serial_port, baudrate, timeout, csv_filename):
