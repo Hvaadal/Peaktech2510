@@ -24,11 +24,12 @@ data_queue = queue.Queue()
 
 def trigger_press():
     global running
-    global toggle_button
+    global data_history
+    global data_queue
+    global start_time
     running = not running
     if running:
         # Set initial time for counter
-        global start_time
         start_time = time.time()
 
         # Start threads
@@ -42,23 +43,19 @@ def trigger_press():
         toggle_button['text'] = "STOP + SAVE"
     else:
         # Clear the data in a sensible way
-        global data_history
         data_history = [[] for _ in range(num_plots)]
+        data_queue = queue.Queue()
 
         # Button is now start button
         toggle_button['text'] = "START"
 
 def update_timer():
-    global timer_label
-    global start_time
-    global running
     while running:
         print(timer_label.keys())
         timer_label['text'] = f'Test time: {(time.time() - start_time):.2f}s'
 
 def get_data(serial_port, baudrate, timeout, csv_filename, input_from_file=False):
     instrument = PeakTech2510(serial_port, baudrate, timeout, input_from_file)
-    
     # Clear the output csv files and write column headers
     for i in range(1,5):
         with open(csv_filename+str(i)+'.csv', 'w', newline='') as csv_file:
@@ -66,13 +63,11 @@ def get_data(serial_port, baudrate, timeout, csv_filename, input_from_file=False
             # csv_writer.writeheader()
     
     # Continuously read from instrument and update csv files with data
-    global running
     while running:
         # Insert a small delay when reading from file, to simulate more accurately the behaviour of actually connecting to an instrument
         if input_from_file:
             time.sleep(0.01)
-        data = instrument.read_data()
-        global q
+        data = instrument.read_data()      
         data_queue.put(data)
         print("put data in q")
         row = {}
@@ -88,8 +83,6 @@ def get_data(serial_port, baudrate, timeout, csv_filename, input_from_file=False
     instrument.close()
 
 def update_plot():
-    global data_history
-    global q
     while not data_queue.empty():
         data=data_queue.get()
         print("got data from q", data.get_display_reading())
@@ -105,18 +98,11 @@ def update_plot():
         ax.set_ylabel(y_labels[i])
         ax.set_ylim(bottom=PLOT_Y_AXIS_LIMITS[i][0], top=PLOT_Y_AXIS_LIMITS[i][1])
         ax.set_xlim(left=PLOT_X_AXIS_LIMITS['left'], right=PLOT_X_AXIS_LIMITS['right'])
-        # ax.set_xlim(left=0, right=100)
 
     canvas.draw()
 
     if running:
         root.after(500, update_plot)
-
-
-
-    # Show the plot
-    plt.tight_layout()
-    plt.show()
 
 
 if __name__ == "__main__":
@@ -135,7 +121,6 @@ if __name__ == "__main__":
     toggle_button.pack()
     timer_label = tk.Label(root, text="Test time 0.00s", font=tk.font.Font(family=TIMER_FONT['family'], size=TIMER_FONT['size']))
     timer_label.pack()
-    
 
     # Plot setup
     num_plots = 4
