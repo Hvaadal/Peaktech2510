@@ -11,8 +11,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 import matplotlib.pyplot as plt
 
-sys.path.append(os.getcwd()+"\..\peaktech2510")
-from PeakTech2510 import PeakTech2510
+from peaktech2510.PeakTech2510 import PeakTech2510
 
 GET_DATA_FROM_FILE = True
 TIMER_FONT = {'family':"Helvetica", 'size':40}
