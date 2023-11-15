@@ -50,7 +50,7 @@ def trigger_press():
         toggle_button['text'] = "STOP + SAVE"
 
     else:
-        # Store data and plot files
+        # Store data to csv files
         timestring = datetime.datetime.today().strftime('%Y%m%d_%H%M%S')
         # Clear the output csv files and write column headers
         for i in range(4):
@@ -60,6 +60,9 @@ def trigger_press():
                 for j, data in enumerate(data_history[i][0]):
                     if data is not None:
                         csv_writer.writerow({'Time':data_history[i][1][j], titles[i]:data_history[i][0][j]})
+
+        # Store plot to png file
+        canvas.print_png(timestring + "_plots.png")
 
         # Button is now start button
         toggle_button['text'] = "START"
